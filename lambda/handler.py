@@ -2,6 +2,8 @@
 TLDR daily pipeline: Gmail -> parse -> summarize -> save summary + audio to S3 -> post to Slack.
 """
 import logging
+
+logging.getLogger().setLevel(logging.INFO)
 import os
 import json
 from datetime import datetime, timezone
