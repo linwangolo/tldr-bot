@@ -2,23 +2,45 @@
 Extract TLDR web version URLs from email HTML, fetch pages, and parse into structured sections
 (Headlines & Launches, Deep Dives & Analysis, etc.) for multiple newsletter formats.
 """
+import html
+import logging
 import re
 import urllib.request
 from typing import Any
 from bs4 import BeautifulSoup
 
+logger = logging.getLogger(__name__)
 
 # Match TLDR web version URLs (various query params)
 WEB_VERSION_PATTERN = re.compile(
     r"https://a\.tldrnewsletter\.com/web-version\?[^\s\"'<>]+",
     re.IGNORECASE,
 )
+WEB_VERSION_SUBSTR = "a.tldrnewsletter.com/web-version"
 
 
-def extract_web_link(html: str) -> str | None:
-    """Extract the first TLDR web-version URL from email HTML."""
-    match = WEB_VERSION_PATTERN.search(html)
-    return match.group(0).split("'")[0].split('"')[0].strip() if match else None
+def _normalize_url(url: str) -> str:
+    """Decode HTML entities (e.g. &amp; -> &) and strip."""
+    return html.unescape(url).replace("&amp;", "&").strip()
+
+
+def extract_web_link(html_content: str) -> str | None:
+    """
+    Extract the first TLDR web-version URL from email HTML.
+    Prefer BeautifulSoup href lookup; fallback to regex.
+    """
+    if not html_content:
+        return None
+    soup = BeautifulSoup(html_content, "lxml")
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if WEB_VERSION_SUBSTR in href:
+            return _normalize_url(href)
+    match = WEB_VERSION_PATTERN.search(html_content)
+    if match:
+        raw = match.group(0).split("'")[0].split('"')[0].strip()
+        return _normalize_url(raw)
+    return None
 
 
 def fetch_html(url: str, timeout_seconds: int = 15) -> str:
@@ -113,8 +135,9 @@ def _parse_tldr_page(html: str, newsletter_name: str, url: str) -> dict[str, Any
 
 def crawl_issue(url: str, newsletter_name: str = "TLDR") -> dict[str, Any]:
     """Fetch TLDR web version URL and return structured issue data."""
-    html = fetch_html(url)
-    return _parse_tldr_page(html, newsletter_name, url)
+    url = _normalize_url(url)
+    raw_html = fetch_html(url)
+    return _parse_tldr_page(raw_html, newsletter_name, url)
 
 
 def parse_emails_to_issues(
@@ -127,13 +150,23 @@ def parse_emails_to_issues(
     issues = []
     seen_urls: set[str] = set()
     for em in emails:
+        subject = (em.get("subject") or "")[:30]
         link = extract_web_link(em.get("html_body") or "")
-        if not link or link in seen_urls:
+        if not link:
+            logger.warning("no_web_link subject_prefix=%s", subject)
+            continue
+        if link in seen_urls:
             continue
         seen_urls.add(link)
         try:
             issue = crawl_issue(link, em.get("newsletter_name") or "TLDR")
             issues.append(issue)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "crawl_failed subject_prefix=%s link=%s error=%s",
+                subject,
+                link[:80] + "..." if len(link) > 80 else link,
+                str(e),
+            )
             continue
     return issues

@@ -1,11 +1,14 @@
 """
 TLDR daily pipeline: Gmail -> parse -> summarize -> save summary + audio to S3 -> post to Slack.
 """
+import logging
 import os
 import json
 from datetime import datetime, timezone
 
 import boto3
+
+logger = logging.getLogger(__name__)
 
 from email_reader import get_secret, fetch_tldr_emails
 from parser import parse_emails_to_issues
@@ -32,12 +35,19 @@ def lambda_handler(event, context):
     gmail_pass = get_secret(GMAIL_SECRET_NAME)
     slack_webhook = get_secret(SLACK_SECRET_NAME)
 
-    emails = fetch_tldr_emails(gmail_user, gmail_pass, since_days=1)
+    since_days = int(os.environ.get("TLDR_SINCE_DAYS", "2"))
+    emails = fetch_tldr_emails(gmail_user, gmail_pass, since_days=since_days)
+    emails_fetched = len(emails)
+    logger.info("emails_fetched=%s", emails_fetched)
     if not emails:
+        logger.warning("no_emails")
         return {"status": "no_emails", "date": date_str}
 
     issues = parse_emails_to_issues(emails)
+    issues_count = len(issues)
+    logger.info("issues_count=%s", issues_count)
     if not issues:
+        logger.warning("no_issues_after_parse emails_fetched=%s", emails_fetched)
         return {"status": "no_issues", "date": date_str}
 
     summary_text = summarize(issues, region=AWS_REGION)

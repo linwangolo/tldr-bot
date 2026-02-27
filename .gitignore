@@ -1,11 +1,30 @@
+# Python
 .venv/
 __pycache__/
 *.py[cod]
+*.pyo
 *.egg-info/
+*.egg
 dist/
 build/
-lambda_layer/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# CDK
+cdk.out/
+
+# Lambda layer (built by build_layer.sh; do not commit)
+lambda_layer/
+
+# Env and secrets
 .env
+.env.*
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo

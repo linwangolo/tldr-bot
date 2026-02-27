@@ -1,12 +1,15 @@
 """
-Gmail IMAP reader: connect, search for TLDR newsletters in the last 24 hours, return raw email content.
+Gmail IMAP reader: connect, search for TLDR newsletters in the last N days, return raw email content.
 """
 import imaplib
 import email
+import logging
 from email.header import decode_header
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import boto3
+
+logger = logging.getLogger(__name__)
 
 
 def get_secret(secret_name: str) -> str:
@@ -50,26 +53,39 @@ def extract_html_body(msg: email.message.Message) -> str | None:
 def fetch_tldr_emails(
     gmail_address: str,
     app_password: str,
-    since_days: int = 1,
+    since_days: int = 2,
     from_domain: str = "tldrnewsletter.com",
+    from_address: str = "dan@tldrnewsletter.com",
 ) -> list[dict[str, Any]]:
     """
     Connect to Gmail via IMAP, search for emails from TLDR in the last `since_days`, return list of
     { "subject", "html_body", "date", "newsletter_name" }.
+    Prefers Gmail X-GM-RAW search when available; falls back to FROM + SINCE.
     """
     mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
     try:
         mail.login(gmail_address, app_password)
         mail.select("INBOX")
 
-        # IMAP SINCE date is in format DD-Mon-YYYY; combine criteria in one string
-        since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%d-%b-%Y")
-        status, messages = mail.search(None, f'(FROM "{from_domain}" SINCE {since})')
-        if status != "OK" or not messages[0]:
-            return []
+        id_list: list[bytes] = []
+        try:
+            gmail_query = f'from:{from_address} newer_than:{since_days}d'
+            status, messages = mail.search("UTF-8", "X-GM-RAW", gmail_query)
+            if status == "OK" and messages[0]:
+                id_list = messages[0].split()
+        except Exception as e:
+            logger.debug("xgmraw_search_failed using_fallback error=%s", str(e))
+        if not id_list:
+            logger.info("using_fallback_imap_search")
+            since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%d-%b-%Y")
+            status, messages = mail.search(None, f'(FROM "{from_address}" SINCE {since})')
+            if status != "OK" or not messages[0]:
+                return []
+            id_list = messages[0].split()
 
-        id_list = messages[0].split()
+        logger.info("imap_uid_count=%s", len(id_list))
         results = []
+        skipped_no_html = 0
 
         for uid in id_list:
             status, data = mail.fetch(uid, "(RFC822)")
@@ -81,19 +97,21 @@ def fetch_tldr_emails(
             subject = decode_mime_header(msg.get("Subject"))
             html_body = extract_html_body(msg)
             if not html_body:
+                skipped_no_html += 1
                 continue
 
             date_str = msg.get("Date") or ""
-            # Infer newsletter name from subject (e.g. "TLDR AI 2026-02-25" -> "TLDR AI")
+            # Infer newsletter name from subject
             newsletter_name = "TLDR"
             if "TLDR AI" in subject or "tldr ai" in subject.lower():
                 newsletter_name = "TLDR AI"
+            elif "TLDR InfoSec" in subject or "infosec" in subject.lower():
+                newsletter_name = "TLDR InfoSec"
             elif "TLDR DevOps" in subject or "devops" in subject.lower():
                 newsletter_name = "TLDR DevOps"
             elif "TLDR Web Dev" in subject or "web dev" in subject.lower():
                 newsletter_name = "TLDR Web Dev"
             elif "TLDR" in subject:
-                # Default to Tech for plain "TLDR" or "TLDR 2026-02-25"
                 newsletter_name = "TLDR Tech"
 
             results.append({
@@ -103,6 +121,8 @@ def fetch_tldr_emails(
                 "newsletter_name": newsletter_name,
             })
 
+        if skipped_no_html:
+            logger.info("skipped_no_html=%s", skipped_no_html)
         return results
     finally:
         try:

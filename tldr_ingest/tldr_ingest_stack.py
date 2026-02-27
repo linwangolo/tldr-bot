@@ -53,6 +53,7 @@ class TldrIngestStack(Stack):
                 "GMAIL_SECRET_NAME": "tldr-bot/gmail-app-password",
                 "GMAIL_ADDRESS_SECRET_NAME": "tldr-bot/gmail-address",
                 "SLACK_SECRET_NAME": "tldr-bot/slack-webhook-url",
+                "TLDR_SINCE_DAYS": "2",
             },
         )
 
