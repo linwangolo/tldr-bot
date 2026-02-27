@@ -2,9 +2,14 @@
 TLDR daily pipeline: Gmail -> parse -> summarize -> save summary + audio to S3 -> post to Slack.
 """
 import logging
-
-logging.getLogger().setLevel(logging.INFO)
 import os
+
+# Lambda defaults to WARNING; set root logger and its handlers so INFO appears in CloudWatch
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
+for _h in _root.handlers:
+    _h.setLevel(logging.INFO)
+
 import json
 from datetime import datetime, timezone
 
