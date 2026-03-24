@@ -5,7 +5,7 @@ Automated daily pipeline: read TLDR newsletters from Gmail, summarize with AWS B
 ## Architecture
 
 - **Trigger**: CloudWatch Events (cron daily at 7:30 AM UTC).
-- **Lambda**: Connects to Gmail via IMAP, fetches TLDR emails from the last 24 hours, extracts web-version URLs, parses content with BeautifulSoup, summarizes with Claude 3.5 Haiku, generates MP3 with Polly Neural, saves `summaries/YYYY-MM-DD.json` and `audio/YYYY-MM-DD.mp3` to S3, then posts a rich message to Slack (inline summary + links to JSON and audio).
+- **Lambda**: Runs daily, but exits early on Sundays and Mondays. On other days it connects to Gmail via IMAP, fetches TLDR emails from the previous UTC day, extracts web-version URLs, parses content with BeautifulSoup, summarizes with Bedrock when available, falls back to a deterministic text briefing if Bedrock is unavailable, generates MP3 with Polly Neural, saves `summaries/YYYY-MM-DD.json` and `audio/YYYY-MM-DD.mp3` to S3, then posts a rich message to Slack (inline summary + links to JSON and audio).
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ Automated daily pipeline: read TLDR newsletters from Gmail, summarize with AWS B
 3. **AWS**  
    - Account with CLI configured.  
    - `cdk bootstrap` run once in the target account/region.  
-   - In [Bedrock console](https://console.aws.amazon.com/bedrock) (same region as deploy), enable **Claude 3.5 Haiku** (model access).
+  - In [Bedrock console](https://console.aws.amazon.com/bedrock) (same region as deploy), enable the configured Anthropic model if you want LLM summaries instead of the built-in fallback summary.
 
 
 ## Deployment
@@ -52,14 +52,14 @@ cdk deploy
 
 ```
 
-After deploy, the Lambda runs daily at 7:30 AM UTC. You can change the schedule in `tldr_ingest/tldr_ingest_stack.py` (`Schedule.cron(minute="30", hour="7")`).
+After deploy, the Lambda runs daily at 7:30 AM UTC, but the handler skips Sunday and Monday runs before fetching email. You can change the schedule in `tldr_ingest/tldr_ingest_stack.py` (`Schedule.cron(minute="30", hour="7")`).
 
 ## Project layout
 
 - `app.py` – CDK app entry.
 - `tldr_ingest/tldr_ingest_stack.py` – Stack: S3 bucket, Lambda, layer, CloudWatch rule, IAM, Polly role.
 - `lambda/` – Lambda code: `handler.py` (orchestrator), `email_reader.py`, `parser.py`, `summarizer.py`, `tts.py`, `slack_notifier.py`.
-- `lambda/requirements.txt` – Dependencies for the Lambda layer (BeautifulSoup, lxml).
+- `lambda/requirements.txt` – Dependencies for the Lambda layer (BeautifulSoup).
 - `build_layer.sh` – Installs layer deps into `lambda_layer/python` for CDK.
 
 ## S3 outputs

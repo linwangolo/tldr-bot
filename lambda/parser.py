@@ -6,8 +6,11 @@ import html
 import logging
 import re
 import urllib.request
+from functools import lru_cache
+from urllib.parse import unquote
 from typing import Any
 from bs4 import BeautifulSoup
+from bs4 import FeatureNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +20,48 @@ WEB_VERSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 WEB_VERSION_SUBSTR = "a.tldrnewsletter.com/web-version"
+TRACKING_PREFIX = "https://tracking.tldrnewsletter.com/CL0/"
+DEFAULT_HTML_PARSER = "lxml"
+FALLBACK_HTML_PARSER = "html.parser"
+
+
+@lru_cache(maxsize=1)
+def _get_parser_name() -> str:
+    try:
+        BeautifulSoup("", DEFAULT_HTML_PARSER)
+        return DEFAULT_HTML_PARSER
+    except FeatureNotFound:
+        logger.info(
+            "preferred_parser_unavailable parser=%s fallback=%s",
+            DEFAULT_HTML_PARSER,
+            FALLBACK_HTML_PARSER,
+        )
+        return FALLBACK_HTML_PARSER
 
 
 def _normalize_url(url: str) -> str:
     """Decode HTML entities (e.g. &amp; -> &) and strip."""
     return html.unescape(url).replace("&amp;", "&").strip()
+
+
+def _unwrap_tracking_url(url: str) -> str:
+    normalized = _normalize_url(url)
+    if not normalized.startswith(TRACKING_PREFIX):
+        return normalized
+
+    payload = normalized[len(TRACKING_PREFIX):]
+    encoded_target = payload.split("/1/", 1)[0]
+    decoded = encoded_target
+    for _ in range(3):
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    return _normalize_url(decoded)
+
+
+def _make_soup(html_content: str) -> BeautifulSoup:
+    return BeautifulSoup(html_content, _get_parser_name())
 
 
 def extract_web_link(html_content: str) -> str | None:
@@ -31,9 +71,9 @@ def extract_web_link(html_content: str) -> str | None:
     """
     if not html_content:
         return None
-    soup = BeautifulSoup(html_content, "lxml")
+    soup = _make_soup(html_content)
     for a in soup.find_all("a", href=True):
-        href = (a.get("href") or "").strip()
+        href = _unwrap_tracking_url((a.get("href") or "").strip())
         if WEB_VERSION_SUBSTR in href:
             return _normalize_url(href)
     match = WEB_VERSION_PATTERN.search(html_content)
@@ -61,7 +101,7 @@ def _parse_tldr_page(html: str, newsletter_name: str, url: str) -> dict[str, Any
     Parse TLDR web version HTML into structured sections.
     TLDR uses h1/h2 for section titles (e.g. "Headlines & Launches", "Deep Dives & Analysis").
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup = _make_soup(html)
     title = _text(soup.find("title")) or soup.find("h1")
     if title and hasattr(title, "get_text"):
         title = title.get_text(separator=" ", strip=True)

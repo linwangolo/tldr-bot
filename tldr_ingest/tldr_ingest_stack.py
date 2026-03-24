@@ -53,7 +53,8 @@ class TldrIngestStack(Stack):
                 "GMAIL_SECRET_NAME": "tldr-bot/gmail-app-password",
                 "GMAIL_ADDRESS_SECRET_NAME": "tldr-bot/gmail-address",
                 "SLACK_SECRET_NAME": "tldr-bot/slack-webhook-url",
-                "TLDR_SINCE_DAYS": "2",
+                "TLDR_TARGET_DAYS_AGO": "1",
+                "BEDROCK_MODEL_ID": "anthropic.claude-3-haiku-20240307-v1:0",
             },
         )
 

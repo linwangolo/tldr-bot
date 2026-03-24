@@ -35,15 +35,22 @@ PRESIGNED_EXPIRY = 86400  # 24 hours
 
 
 def lambda_handler(event, context):
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now_utc = datetime.now(timezone.utc)
+    date_str = now_utc.strftime("%Y-%m-%d")
+    weekday = now_utc.strftime("%A")
+
+    if weekday in {"Sunday", "Monday"}:
+        logger.info("skipping_fetch_no_expected_newsletters weekday=%s date=%s", weekday, date_str)
+        return {"status": "skipped_no_newsletter_day", "date": date_str, "weekday": weekday}
+
     s3 = boto3.client("s3", region_name=AWS_REGION)
 
     gmail_user = get_secret(GMAIL_ADDRESS_SECRET_NAME)
     gmail_pass = get_secret(GMAIL_SECRET_NAME)
     slack_webhook = get_secret(SLACK_SECRET_NAME)
 
-    since_days = int(os.environ.get("TLDR_SINCE_DAYS", "2"))
-    emails = fetch_tldr_emails(gmail_user, gmail_pass, since_days=since_days)
+    target_days_ago = int(os.environ.get("TLDR_TARGET_DAYS_AGO", "1"))
+    emails = fetch_tldr_emails(gmail_user, gmail_pass, target_days_ago=target_days_ago)
     emails_fetched = len(emails)
     logger.info("emails_fetched=%s", emails_fetched)
     if not emails:
@@ -102,6 +109,7 @@ def lambda_handler(event, context):
         ExpiresIn=PRESIGNED_EXPIRY,
     )
 
+    logger.info("slack_post_start date=%s", date_str)
     post_briefing(
         webhook_url=slack_webhook,
         summary_text=summary_text,
@@ -109,6 +117,7 @@ def lambda_handler(event, context):
         audio_url=audio_presigned,
         date_str=date_str,
     )
+    logger.info("slack_post_success date=%s", date_str)
 
     return {
         "status": "success",

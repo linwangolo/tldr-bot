@@ -3,10 +3,14 @@ Summarize parsed TLDR newsletter content using Bedrock Claude 3.5 Haiku.
 Produces a conversational 2-3 minute spoken briefing.
 """
 import json
+import logging
+import os
 import boto3
 from typing import Any
 
-BEDROCK_MODEL_ID = "anthropic.claude-3-5-haiku-20241022-v1:0"
+logger = logging.getLogger(__name__)
+
+BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
 MAX_TOKENS = 2048
 TEMPERATURE = 0.3
 
@@ -20,6 +24,28 @@ def _build_combined_content(issues: list[dict[str, Any]]) -> str:
         content = issue.get("content") or ""
         parts.append(f"--- Newsletter {i}: {name} ---\n{title}\n\n{content}\n")
     return "\n".join(parts)
+
+
+def _fallback_summary(issues: list[dict[str, Any]]) -> str:
+    parts = ["Here's your TLDR fallback briefing for today."]
+    for issue in issues[:6]:
+        name = issue.get("newsletter_name") or "TLDR"
+        title = issue.get("title") or "Untitled issue"
+        parts.append(f"{name}: {title}.")
+
+        items = issue.get("items") or []
+        if items:
+            top_titles = []
+            for item in items[:3]:
+                item_title = (item.get("title") or "").strip()
+                if item_title:
+                    top_titles.append(item_title)
+            if top_titles:
+                parts.append("Highlights include " + "; ".join(top_titles) + ".")
+
+    parts.append("This version was generated without Bedrock because the model call was unavailable.")
+    parts.append("That's your TLDR for today.")
+    return " ".join(parts)
 
 
 def summarize(issues: list[dict[str, Any]], region: str | None = None) -> str:
@@ -53,11 +79,15 @@ Content:
         "temperature": TEMPERATURE,
         "messages": [{"role": "user", "content": full_prompt}],
     }
-    response = client.invoke_model(
-        modelId=BEDROCK_MODEL_ID,
-        body=json.dumps(body),
-        contentType="application/json",
-    )
-    result = json.loads(response["body"].read())
-    text = result["content"][0]["text"]
-    return text.strip()
+    try:
+        response = client.invoke_model(
+            modelId=BEDROCK_MODEL_ID,
+            body=json.dumps(body),
+            contentType="application/json",
+        )
+        result = json.loads(response["body"].read())
+        text = result["content"][0]["text"]
+        return text.strip()
+    except Exception as e:
+        logger.warning("bedrock_summary_failed model_id=%s error=%s", BEDROCK_MODEL_ID, str(e))
+        return _fallback_summary(issues)

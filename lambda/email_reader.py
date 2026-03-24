@@ -53,39 +53,66 @@ def extract_html_body(msg: email.message.Message) -> str | None:
 def fetch_tldr_emails(
     gmail_address: str,
     app_password: str,
-    since_days: int = 2,
+    target_days_ago: int = 1,
     from_domain: str = "tldrnewsletter.com",
     from_address: str = "dan@tldrnewsletter.com",
 ) -> list[dict[str, Any]]:
     """
-    Connect to Gmail via IMAP, search for emails from TLDR in the last `since_days`, return list of
-    { "subject", "html_body", "date", "newsletter_name" }.
-    Prefers Gmail X-GM-RAW search when available; falls back to FROM + SINCE.
+    Connect to Gmail via IMAP and search a single UTC calendar day window for TLDR emails.
+    By default, this targets yesterday (target_days_ago=1) instead of the current day.
+    Returns list of { "subject", "html_body", "date", "newsletter_name" }.
+    Prefers Gmail X-GM-RAW search when available; falls back to FROM + SINCE + BEFORE.
     """
     mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
     try:
         mail.login(gmail_address, app_password)
         mail.select("INBOX")
 
+        window_end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=target_days_ago - 1)
+        window_start = window_end - timedelta(days=1)
+        gmail_after = window_start.strftime("%Y/%m/%d")
+        gmail_before = window_end.strftime("%Y/%m/%d")
+        imap_since = window_start.strftime("%d-%b-%Y")
+        imap_before = window_end.strftime("%d-%b-%Y")
+
         id_list: list[bytes] = []
+        search_mode = "x-gm-raw"
         try:
-            gmail_query = f'from:{from_address} newer_than:{since_days}d'
-            status, messages = mail.search("UTF-8", "X-GM-RAW", gmail_query)
+            gmail_query = f'from:{from_address} after:{gmail_after} before:{gmail_before}'
+            status, messages = mail.search(None, "X-GM-RAW", f'"{gmail_query}"')
+            logger.info("xgmraw_search_status=%s raw_response=%s", status, messages)
             if status == "OK" and messages[0]:
                 id_list = messages[0].split()
         except Exception as e:
-            logger.debug("xgmraw_search_failed using_fallback error=%s", str(e))
+            logger.warning("xgmraw_search_failed using_fallback error=%s", str(e))
         if not id_list:
+            search_mode = "fallback-from-since"
             logger.info("using_fallback_imap_search")
-            since = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime("%d-%b-%Y")
-            status, messages = mail.search(None, f'(FROM "{from_address}" SINCE {since})')
+            status, messages = mail.search(None, f'(FROM "{from_address}" SINCE {imap_since} BEFORE {imap_before})')
+            logger.info("fallback_search_status=%s raw_response=%s", status, messages)
             if status != "OK" or not messages[0]:
+                logger.warning(
+                    "no_matching_emails search_mode=%s from_address=%s target_days_ago=%s window_start=%s window_end=%s",
+                    search_mode,
+                    from_address,
+                    target_days_ago,
+                    window_start.isoformat(),
+                    window_end.isoformat(),
+                )
                 return []
             id_list = messages[0].split()
 
-        logger.info("imap_uid_count=%s", len(id_list))
+        logger.info(
+            "imap_uid_count=%s search_mode=%s target_days_ago=%s window_start=%s window_end=%s",
+            len(id_list),
+            search_mode,
+            target_days_ago,
+            window_start.isoformat(),
+            window_end.isoformat(),
+        )
         results = []
         skipped_no_html = 0
+        sample_subjects: list[str] = []
 
         for uid in id_list:
             status, data = mail.fetch(uid, "(RFC822)")
@@ -114,6 +141,9 @@ def fetch_tldr_emails(
             elif "TLDR" in subject:
                 newsletter_name = "TLDR Tech"
 
+            if len(sample_subjects) < 5:
+                sample_subjects.append(subject[:200])
+
             results.append({
                 "subject": subject,
                 "html_body": html_body,
@@ -123,6 +153,9 @@ def fetch_tldr_emails(
 
         if skipped_no_html:
             logger.info("skipped_no_html=%s", skipped_no_html)
+        if sample_subjects:
+            logger.info("matched_subjects_sample=%s", sample_subjects)
+        logger.info("emails_returned=%s", len(results))
         return results
     finally:
         try:
