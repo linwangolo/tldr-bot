@@ -55,6 +55,7 @@ class TldrIngestStack(Stack):
                 "SLACK_SECRET_NAME": "tldr-bot/slack-webhook-url",
                 "TLDR_TARGET_DAYS_AGO": "1",
                 "BEDROCK_MODEL_ID": "anthropic.claude-3-haiku-20240307-v1:0",
+                "FALLBACK_BEDROCK_MODEL_ID": "amazon.nova-lite-v1:0",
             },
         )
 

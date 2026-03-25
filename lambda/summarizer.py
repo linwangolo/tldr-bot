@@ -11,6 +11,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
+FALLBACK_BEDROCK_MODEL_ID = os.environ.get("FALLBACK_BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
 MAX_TOKENS = 2048
 TEMPERATURE = 0.3
 
@@ -48,6 +49,45 @@ def _fallback_summary(issues: list[dict[str, Any]]) -> str:
     return " ".join(parts)
 
 
+def _invoke_anthropic(client, prompt: str, model_id: str) -> str:
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": MAX_TOKENS,
+        "temperature": TEMPERATURE,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    response = client.invoke_model(
+        modelId=model_id,
+        body=json.dumps(body),
+        contentType="application/json",
+    )
+    result = json.loads(response["body"].read())
+    return result["content"][0]["text"].strip()
+
+
+def _invoke_amazon_nova(client, prompt: str, model_id: str) -> str:
+    body = {
+        "schemaVersion": "messages-v1",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"text": prompt}],
+            }
+        ],
+        "inferenceConfig": {
+            "max_new_tokens": MAX_TOKENS,
+            "temperature": TEMPERATURE,
+        },
+    }
+    response = client.invoke_model(
+        modelId=model_id,
+        body=json.dumps(body),
+        contentType="application/json",
+    )
+    result = json.loads(response["body"].read())
+    return result["output"]["message"]["content"][0]["text"].strip()
+
+
 def summarize(issues: list[dict[str, Any]], region: str | None = None) -> str:
     """
     Call Bedrock Claude 3.5 Haiku to produce a concise spoken briefing from parsed TLDR content.
@@ -73,21 +113,13 @@ Content:
     full_prompt = prompt + combined
 
     client = boto3.client("bedrock-runtime", region_name=region or "us-east-1")
-    body = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": MAX_TOKENS,
-        "temperature": TEMPERATURE,
-        "messages": [{"role": "user", "content": full_prompt}],
-    }
     try:
-        response = client.invoke_model(
-            modelId=BEDROCK_MODEL_ID,
-            body=json.dumps(body),
-            contentType="application/json",
-        )
-        result = json.loads(response["body"].read())
-        text = result["content"][0]["text"]
-        return text.strip()
+        return _invoke_anthropic(client, full_prompt, BEDROCK_MODEL_ID)
     except Exception as e:
         logger.warning("bedrock_summary_failed model_id=%s error=%s", BEDROCK_MODEL_ID, str(e))
+    try:
+        logger.info("bedrock_summary_fallback_start model_id=%s", FALLBACK_BEDROCK_MODEL_ID)
+        return _invoke_amazon_nova(client, full_prompt, FALLBACK_BEDROCK_MODEL_ID)
+    except Exception as e:
+        logger.warning("bedrock_summary_fallback_failed model_id=%s error=%s", FALLBACK_BEDROCK_MODEL_ID, str(e))
         return _fallback_summary(issues)
