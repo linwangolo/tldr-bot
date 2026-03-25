@@ -55,7 +55,10 @@ class TldrIngestStack(Stack):
                 "SLACK_SECRET_NAME": "tldr-bot/slack-webhook-url",
                 "TLDR_TARGET_DAYS_AGO": "1",
                 "BEDROCK_MODEL_ID": "anthropic.claude-3-haiku-20240307-v1:0",
-                "FALLBACK_BEDROCK_MODEL_ID": "amazon.nova-lite-v1:0",
+                "BULLET_BEDROCK_MODEL_ID": "anthropic.claude-3-haiku-20240307-v1:0",
+                "FALLBACK_BEDROCK_MODEL_ID": "openai.gpt-oss-120b-1:0",
+                "SUMMARY_MAX_TOKENS": "6000",
+                "OPENAI_CONTINUATION_PASSES": "1",
             },
         )
 
@@ -80,7 +83,7 @@ class TldrIngestStack(Stack):
             )
         )
 
-        # Permissions: Polly SynthesizeSpeech (sync only; Polly does not support assume-role in trust policy)
+        # Permissions: Polly sync synthesis
         fn.add_to_role_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,

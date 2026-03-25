@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 from email_reader import get_secret, fetch_tldr_emails
 from parser import parse_emails_to_issues
-from summarizer import summarize
+from summarizer import summarize, generate_bullet_summary
 from tts import synthesize_to_s3
 from slack_notifier import post_briefing
 
@@ -32,6 +32,22 @@ POLLY_S3_ROLE_ARN = os.environ.get("POLLY_S3_ROLE_ARN") or ""
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 PRESIGNED_EXPIRY = 86400  # 24 hours
+
+
+def _collect_references(issues: list[dict]) -> list[dict[str, str]]:
+    references: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for issue in issues:
+        for item in issue.get("items") or []:
+            url = (item.get("url") or "").strip()
+            title = (item.get("title") or "").strip()
+            if not url or not title or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            references.append({"title": title[:150], "url": url})
+
+    return references
 
 
 def lambda_handler(event, context):
@@ -65,8 +81,11 @@ def lambda_handler(event, context):
         return {"status": "no_issues", "date": date_str}
 
     summary_text = summarize(issues, region=AWS_REGION)
+    references = _collect_references(issues)
+    bullet_summary_text = generate_bullet_summary(summary_text, issues, region=AWS_REGION)
 
     summary_key = f"summaries/{date_str}.json"
+    full_summary_key = f"summaries/{date_str}.txt"
     summary_doc = {
         "date": date_str,
         "newsletter_sources": [i.get("newsletter_name") for i in issues],
@@ -79,6 +98,7 @@ def lambda_handler(event, context):
             }
             for i in issues
         ],
+        "references": references,
         "summary_text": summary_text,
         "metadata": {"generated_at": datetime.now(timezone.utc).isoformat()},
     }
@@ -87,6 +107,12 @@ def lambda_handler(event, context):
         Key=summary_key,
         Body=json.dumps(summary_doc, indent=2),
         ContentType="application/json",
+    )
+    s3.put_object(
+        Bucket=ARTIFACTS_BUCKET,
+        Key=full_summary_key,
+        Body=summary_text,
+        ContentType="text/plain; charset=utf-8",
     )
 
     audio_key = f"audio/{date_str}.mp3"
@@ -98,9 +124,9 @@ def lambda_handler(event, context):
         region=AWS_REGION,
     )
 
-    summary_presigned = s3.generate_presigned_url(
+    full_summary_presigned = s3.generate_presigned_url(
         "get_object",
-        Params={"Bucket": ARTIFACTS_BUCKET, "Key": summary_key},
+        Params={"Bucket": ARTIFACTS_BUCKET, "Key": full_summary_key},
         ExpiresIn=PRESIGNED_EXPIRY,
     )
     audio_presigned = s3.generate_presigned_url(
@@ -112,8 +138,8 @@ def lambda_handler(event, context):
     logger.info("slack_post_start date=%s", date_str)
     post_briefing(
         webhook_url=slack_webhook,
-        summary_text=summary_text,
-        summary_json_url=summary_presigned,
+        bullet_summary_text=bullet_summary_text,
+        full_summary_url=full_summary_presigned,
         audio_url=audio_presigned,
         date_str=date_str,
     )
@@ -123,6 +149,7 @@ def lambda_handler(event, context):
         "status": "success",
         "date": date_str,
         "summary_key": summary_key,
+        "full_summary_key": full_summary_key,
         "audio_key": audio_key,
         "issues_count": len(issues),
     }

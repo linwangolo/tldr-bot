@@ -28,3 +28,6 @@ lambda_layer/
 .DS_Store
 *.swp
 *.swo
+
+# aws pkg
+*.pkg

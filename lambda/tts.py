@@ -10,6 +10,7 @@ POLLY_VOICE = "Matthew"  # Neural English (US)
 POLLY_ENGINE_NEURAL = "neural"
 POLLY_ENGINE_LONG_FORM = "long-form"
 SYNC_MAX_CHARS = 3000  # Use sync SynthesizeSpeech below this length
+SYNC_CHUNK_TARGET = 2600
 
 
 def _synthesize_sync(text: str, region: str | None = None) -> bytes:
@@ -24,6 +25,38 @@ def _synthesize_sync(text: str, region: str | None = None) -> bytes:
         Engine=POLLY_ENGINE_NEURAL,
     )
     return resp["AudioStream"].read()
+
+
+def _split_text_for_sync(text: str) -> list[str]:
+    if len(text) <= SYNC_MAX_CHARS:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text.strip()
+    while remaining:
+        if len(remaining) <= SYNC_MAX_CHARS:
+            chunks.append(remaining)
+            break
+
+        split_at = remaining.rfind(". ", 0, SYNC_CHUNK_TARGET)
+        if split_at == -1:
+            split_at = remaining.rfind(" ", 0, SYNC_CHUNK_TARGET)
+        if split_at == -1:
+            split_at = SYNC_CHUNK_TARGET
+
+        chunk = remaining[: split_at + 1].strip()
+        if not chunk:
+            chunk = remaining[:SYNC_CHUNK_TARGET].strip()
+        chunks.append(chunk)
+        remaining = remaining[len(chunk) :].strip()
+
+    return chunks
+
+
+def _synthesize_sync_long(text: str, region: str | None = None) -> bytes:
+    # MP3 frame concatenation is supported by common players and avoids async Polly setup.
+    audio_parts = [_synthesize_sync(chunk, region) for chunk in _split_text_for_sync(text)]
+    return b"".join(audio_parts)
 
 
 def _synthesize_async(
@@ -81,8 +114,7 @@ def synthesize_to_s3(
         s3.put_object(Bucket=bucket, Key=audio_key, Body=audio_bytes, ContentType="audio/mpeg")
         return audio_key
     if not polly_role_arn:
-        text = text[:SYNC_MAX_CHARS] + "… [Summary truncated for audio.]"
-        audio_bytes = _synthesize_sync(text, region)
+        audio_bytes = _synthesize_sync_long(text, region)
         s3.put_object(Bucket=bucket, Key=audio_key, Body=audio_bytes, ContentType="audio/mpeg")
         return audio_key
     # Long-form: prefix so we get a known pattern, then copy to final key

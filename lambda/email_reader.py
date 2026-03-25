@@ -4,12 +4,15 @@ Gmail IMAP reader: connect, search for TLDR newsletters in the last N days, retu
 import imaplib
 import email
 import logging
+import time
 from email.header import decode_header
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import boto3
 
 logger = logging.getLogger(__name__)
+IMAP_LOGIN_ATTEMPTS = 3
+IMAP_LOGIN_BACKOFF_SECONDS = 2
 
 
 def get_secret(secret_name: str) -> str:
@@ -65,7 +68,17 @@ def fetch_tldr_emails(
     """
     mail = imaplib.IMAP4_SSL("imap.gmail.com", 993)
     try:
-        mail.login(gmail_address, app_password)
+        last_login_error: Exception | None = None
+        for attempt in range(1, IMAP_LOGIN_ATTEMPTS + 1):
+            try:
+                mail.login(gmail_address, app_password)
+                break
+            except imaplib.IMAP4.error as e:
+                last_login_error = e
+                logger.warning("imap_login_failed attempt=%s error=%s", attempt, str(e))
+                if attempt == IMAP_LOGIN_ATTEMPTS:
+                    raise
+                time.sleep(IMAP_LOGIN_BACKOFF_SECONDS * attempt)
         mail.select("INBOX")
 
         window_end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=target_days_ago - 1)
