@@ -3,6 +3,7 @@ TLDR daily pipeline: Gmail -> parse -> summarize -> save summary + audio to S3 -
 """
 import logging
 import os
+from urllib.parse import quote
 
 # Lambda defaults to WARNING; set root logger and its handlers so INFO appears in CloudWatch
 _root = logging.getLogger()
@@ -30,8 +31,6 @@ GMAIL_ADDRESS_SECRET_NAME = os.environ["GMAIL_ADDRESS_SECRET_NAME"]
 SLACK_SECRET_NAME = os.environ["SLACK_SECRET_NAME"]
 POLLY_S3_ROLE_ARN = os.environ.get("POLLY_S3_ROLE_ARN") or ""
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
-
-PRESIGNED_EXPIRY = 86400  # 24 hours
 
 
 def _collect_references(issues: list[dict]) -> list[dict[str, str]]:
@@ -124,23 +123,15 @@ def lambda_handler(event, context):
         region=AWS_REGION,
     )
 
-    full_summary_presigned = s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": ARTIFACTS_BUCKET, "Key": full_summary_key},
-        ExpiresIn=PRESIGNED_EXPIRY,
-    )
-    audio_presigned = s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": ARTIFACTS_BUCKET, "Key": audio_key},
-        ExpiresIn=PRESIGNED_EXPIRY,
-    )
+    full_summary_url = f"https://{ARTIFACTS_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{quote(full_summary_key)}"
+    audio_url = f"https://{ARTIFACTS_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{quote(audio_key)}"
 
     logger.info("slack_post_start date=%s", date_str)
     post_briefing(
         webhook_url=slack_webhook,
         bullet_summary_text=bullet_summary_text,
-        full_summary_url=full_summary_presigned,
-        audio_url=audio_presigned,
+        full_summary_url=full_summary_url,
+        audio_url=audio_url,
         date_str=date_str,
     )
     logger.info("slack_post_success date=%s", date_str)

@@ -21,12 +21,26 @@ class TldrIngestStack(Stack):
             "TldrArtifactsBucket",
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
+            block_public_access=s3.BlockPublicAccess.BLOCK_ACLS,
             lifecycle_rules=[
                 s3.LifecycleRule(
                     enabled=True,
                     expiration=Duration.days(30),
                 )
             ],
+        )
+
+        artifacts_bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                sid="PublicReadSummariesAndAudioOnly",
+                effect=iam.Effect.ALLOW,
+                principals=[iam.AnyPrincipal()],
+                actions=["s3:GetObject"],
+                resources=[
+                    artifacts_bucket.arn_for_objects("summaries/*"),
+                    artifacts_bucket.arn_for_objects("audio/*"),
+                ],
+            )
         )
 
         # Lambda layer for beautifulsoup4 and lxml (built separately; see lambda/README or build script)
