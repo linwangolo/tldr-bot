@@ -31,3 +31,11 @@ lambda_layer/
 
 # aws pkg
 *.pkg
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+.build/

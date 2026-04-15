@@ -1,0 +1,94 @@
+name: Terraform Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply changes after plan"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+  pull_request:
+    branches: [main]
+    paths:
+      - "infra/terraform/**"
+      - "lambda/**"
+      - "scripts/package_lambda_assets.sh"
+      - ".github/workflows/terraform-deploy.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/terraform/**"
+      - "lambda/**"
+      - "scripts/package_lambda_assets.sh"
+      - ".github/workflows/terraform-deploy.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_VAR_project_name: ${{ vars.TF_PROJECT_NAME || 'tldrbot' }}
+  TF_VAR_environment: ${{ vars.TF_ENVIRONMENT || 'prod' }}
+  TF_BACKEND_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
+  TF_BACKEND_DDB_TABLE: ${{ secrets.TF_BACKEND_DDB_TABLE }}
+  TF_BACKEND_KEY: tldr-bot/terraform.tfstate
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_TERRAFORM_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Package Lambda assets
+        run: |
+          chmod +x scripts/package_lambda_assets.sh
+          ./scripts/package_lambda_assets.sh
+
+      - name: Terraform Init
+        working-directory: infra/terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=${TF_BACKEND_BUCKET}" \
+            -backend-config="key=${TF_BACKEND_KEY}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="dynamodb_table=${TF_BACKEND_DDB_TABLE}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Validate
+        working-directory: infra/terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: infra/terraform
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply (main only)
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && inputs.apply == 'true')
+        working-directory: infra/terraform
+        run: terraform apply -auto-approve tfplan
